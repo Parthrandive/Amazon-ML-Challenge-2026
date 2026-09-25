@@ -83,13 +83,15 @@ def get_address_tokens(addr: Optional[str]) -> Tuple[List[str], List[str]]:
 def get_tight_blocking_keys(
     country: str,
     name: Optional[str],
-    addr: Optional[str]
+    addr: Optional[str],
+    postal_code: Optional[str] = None
 ) -> List[str]:
     """
     Generates tightened composite blocking keys:
     1. Pass 1: Name First Significant Token (4-char prefix & phonetic initial)
     2. Pass 2: Address Number + Distinctive Street Word (always composite)
     3. Pass 3: 2-Token Shingles (t0_t1 pair, t0_t2 pair) & non-generic secondary token
+    4. Pass 4: Postal Code Key Family (_pc_ exact match & _pcp_ regional prefix fallback)
     """
     tokens = get_name_tokens(name)
     nums, street_words = get_address_tokens(addr)
@@ -121,7 +123,40 @@ def get_tight_blocking_keys(
             for sw in street_words[:3]:
                 keys.add(f"{country}_as_{num}_{sw[:4]}")
 
+    # Pass 4: Postal code key family (exact + regional prefix fallback)
+    if postal_code is None and addr:
+        from postal import extract_postal_code
+        postal_code = extract_postal_code(addr, country)
+
+    if postal_code and str(postal_code) not in ("POSTAL_MISSING", "nan", "None", ""):
+        clean_pc = str(postal_code).strip()
+        # Full exact postal code key (high quality signal)
+        keys.add(f"{country}_pc_{clean_pc}")
+
+        # Looser postal prefix fallback (first 3-4 digits for typo/partial tolerance)
+        pref_len = 4 if len(clean_pc) == 6 else 3
+        if len(clean_pc) >= pref_len:
+            keys.add(f"{country}_pcp_{clean_pc[:pref_len]}")
+
     return list(keys)
+
+
+def get_adaptive_block_cap(key: str) -> int:
+    """
+    Tiered adaptive caps for inverted index blocks:
+    - _pc_ (exact postal): dense urban ZIP/PIN, high signal quality -> 1200
+    - _as_ (address composite): street-level composite -> 800
+    - _pcp_ (postal prefix): looser regional prefix, capped to prevent block flooding -> 400
+    - default (name-based): -> 500
+    """
+    if "_pc_" in key:
+        return 1200
+    elif "_as_" in key:
+        return 800
+    elif "_pcp_" in key:
+        return 400
+    else:
+        return 500
 
 
 def fast_combined_similarity(
@@ -129,11 +164,14 @@ def fast_combined_similarity(
     s2_name: str,
     s1_toks_set: Set[str],
     s1_nums_set: Set[str],
-    s2_nums_set: Set[str]
+    s2_nums_set: Set[str],
+    s1_postal: Optional[str] = None,
+    s2_postal: Optional[str] = None
 ) -> float:
     """
     Lightweight, C-level string similarity pre-ranker.
-    Combines character 3-gram Jaccard, token Jaccard, and address number match bonus/penalty.
+    Combines character 3-gram Jaccard, token Jaccard, address number match bonus/penalty,
+    and postal match bonus.
     """
     if s1_name and s1_name == s2_name:
         name_sim = 1.0
@@ -159,6 +197,14 @@ def fast_combined_similarity(
         if s1_nums_set & s2_nums_set:
             addr_bonus = 0.35  # Confirmatory building/house number match
         else:
-            addr_bonus = -0.15 # Conflicting numbers on same street
+            addr_bonus = -0.15  # Conflicting numbers on same street
 
-    return name_sim + addr_bonus
+    # Postal code match bonus
+    postal_bonus = 0.0
+    if s1_postal and s2_postal and s1_postal not in ("POSTAL_MISSING", "nan", "") and s2_postal not in ("POSTAL_MISSING", "nan", ""):
+        if s1_postal == s2_postal:
+            postal_bonus = 0.25
+        elif len(s1_postal) >= 3 and len(s2_postal) >= 3 and s1_postal[:3] == s2_postal[:3]:
+            postal_bonus = 0.10
+
+    return name_sim + addr_bonus + postal_bonus

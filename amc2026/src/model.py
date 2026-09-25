@@ -62,20 +62,7 @@ def find_optimal_threshold_for_f05(
     """
     Evaluates candidate predictions across a grid of thresholds to maximize
     the official competition macro-averaged F_0.5 score.
-    
-    Parameters:
-    -----------
-    clf: trained classifier with predict_proba
-    val_s1_ids: list of Source 1 entity IDs in the validation set
-    s1_to_candidates: mapping from s1_id to list of (cand_id, feature_vector)
-    gt_mapping: dict mapping s1_id to set of true matched_entity_ids
-    threshold_range: array of candidate probability thresholds
-    
-    Returns:
-    --------
-    (best_threshold, best_macro_f05, threshold_scores_dict)
     """
-    # Precompute model probabilities for all candidate pairs in validation
     s1_cand_probs: Dict[str, List[Tuple[str, float]]] = {}
     
     for s1_id in val_s1_ids:
@@ -111,6 +98,41 @@ def find_optimal_threshold_for_f05(
             best_thresh = float(thresh)
 
     return best_thresh, best_f05, history
+
+
+def find_optimal_threshold_two_phase(
+    clf: lgb.LGBMClassifier,
+    val_s1_ids: List[str],
+    s1_to_candidates: Dict[str, List[Tuple[str, np.ndarray]]],
+    gt_mapping: Dict[str, Set[str]],
+    coarse_range: np.ndarray = np.arange(0.35, 0.90, 0.05),
+    fine_radius: float = 0.04,
+    fine_step: float = 0.005
+) -> Tuple[float, float, Dict[float, float]]:
+    """
+    Two-Phase Threshold Search:
+    Phase 1 (Coarse): Broad scan over coarse_range (e.g. 0.35 to 0.85 by 0.05)
+    Phase 2 (Fine): High-precision local zoom around the coarse peak (radius +- 0.04 by 0.005)
+    Guarantees pinpoint optimization of macro F_0.5 without expensive dense global sweeps.
+    """
+    print("  Phase 1: Coarse threshold sweep across range [%.2f, %.2f]..." % (coarse_range[0], coarse_range[-1]))
+    best_coarse_th, best_coarse_f05, coarse_history = find_optimal_threshold_for_f05(
+        clf, val_s1_ids, s1_to_candidates, gt_mapping, threshold_range=coarse_range
+    )
+    print(f"  Coarse Peak: tau = {best_coarse_th:.2f} (Macro F_0.5 = {best_coarse_f05:.4f})")
+
+    # Fine search around peak
+    fine_min = max(0.20, best_coarse_th - fine_radius)
+    fine_max = min(0.98, best_coarse_th + fine_radius + fine_step / 2.0)
+    fine_range = np.arange(fine_min, fine_max, fine_step)
+
+    print(f"  Phase 2: Fine zoom across [{fine_min:.3f}, {fine_max:.3f}] with step {fine_step:.3f}...")
+    best_fine_th, best_fine_f05, fine_history = find_optimal_threshold_for_f05(
+        clf, val_s1_ids, s1_to_candidates, gt_mapping, threshold_range=fine_range
+    )
+
+    combined_history = {**coarse_history, **fine_history}
+    return best_fine_th, best_fine_f05, combined_history
 
 
 def save_matcher_model(clf: lgb.LGBMClassifier, threshold: float, filepath: str):

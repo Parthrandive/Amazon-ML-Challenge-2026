@@ -93,6 +93,12 @@ TRANSLIT_SUFFIX_RE = re.compile(
 NON_LATIN_RE = re.compile(r"[\u0600-\u0D7F\u200B-\u200D\u3000-\uD7AF\u4E00-\u9FFF]")
 
 # ---------------------------------------------------------
+# Postal code functions
+# ---------------------------------------------------------
+from postal import extract_postal_code, is_valid_postal, POSTAL_MISSING
+
+
+# ---------------------------------------------------------
 # Address abbreviation standardizers
 # ---------------------------------------------------------
 ADDR_PUNCT_RE = re.compile(r"[^\w\s,\u0900-\u0D7F]")
@@ -223,5 +229,12 @@ def preprocess_source(df: pd.DataFrame) -> pd.DataFrame:
     # Address normalization
     clean_addr_map = {a: normalize_address(a) for a in unique_addrs}
     result["business_address_clean"] = raw_addrs.map(clean_addr_map)
+
+    # --- 3. Extract Country-Specific Postal Codes ---
+    raw_countries = result["country"].fillna("").astype(str)
+    addr_country_pairs = list(zip(result["business_address_clean"], raw_countries))
+    unique_pairs = list(set(addr_country_pairs))
+    postal_map = {pair: extract_postal_code(pair[0], pair[1]) for pair in unique_pairs}
+    result["postal_code"] = [postal_map[pair] for pair in addr_country_pairs]
 
     return result

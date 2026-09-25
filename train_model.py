@@ -17,8 +17,9 @@ import numpy as np
 sys.path.append(os.path.abspath("src"))
 sys.path.append(os.path.abspath("amc2026/src"))
 from features import extract_pair_features, FEATURE_NAMES
-from model import train_lgbm_model, find_optimal_threshold_for_f05, save_matcher_model
+from model import train_lgbm_model, find_optimal_threshold_for_f05, find_optimal_threshold_two_phase, save_matcher_model
 from evaluate import compute_entity_f05, evaluate_predictions
+from blocking import get_tight_blocking_keys
 
 # Set seeds for reproducibility
 random.seed(42)
@@ -39,6 +40,7 @@ def load_pool_subset(s2_path: str, s3_path: str, needed_ids: Set[str]) -> Dict[s
             country_idx = header.index("country")
             name_idx = header.index("business_name_clean")
             addr_idx = header.index("business_address_clean")
+            postal_idx = header.index("postal_code") if "postal_code" in header else -1
             for line in f:
                 parts = line.rstrip("\n").split("\t")
                 eid = parts[id_idx]
@@ -48,6 +50,7 @@ def load_pool_subset(s2_path: str, s3_path: str, needed_ids: Set[str]) -> Dict[s
                         "country": parts[country_idx] if len(parts) > country_idx else "",
                         "business_name_clean": parts[name_idx] if len(parts) > name_idx else "",
                         "business_address_clean": parts[addr_idx] if len(parts) > addr_idx else "",
+                        "postal_code": parts[postal_idx] if (postal_idx != -1 and len(parts) > postal_idx) else "",
                     }
                     needed.discard(eid)
                     if not needed:
@@ -122,6 +125,7 @@ def main():
         country_idx = header.index("country")
         name_idx = header.index("business_name_clean")
         addr_idx = header.index("business_address_clean")
+        postal_idx = header.index("postal_code") if "postal_code" in header else -1
         for line in f:
             parts = line.rstrip("\n").split("\t")
             s1 = parts[id_idx]
@@ -131,6 +135,7 @@ def main():
                     "country": parts[country_idx] if len(parts) > country_idx else "",
                     "business_name_clean": parts[name_idx] if len(parts) > name_idx else "",
                     "business_address_clean": parts[addr_idx] if len(parts) > addr_idx else "",
+                    "postal_code": parts[postal_idx] if (postal_idx != -1 and len(parts) > postal_idx) else "",
                 }
                 if len(s1_dict) == len(sample_s1_set):
                     break
@@ -140,6 +145,19 @@ def main():
     t0 = time.time()
     pool_dict = load_pool_subset(s2_file, s3_file, needed_cand_ids)
     print(f"Loaded {len(pool_dict):,} candidate pool records in {time.time() - t0:.2f}s.")
+
+    # Precompute blocking keys for fast, active shared_key_count calculation
+    print("Precomputing multi-pass blocking keys for active shared_key_count...")
+    t_keys = time.time()
+    s1_keys_cache = {
+        s1_id: set(get_tight_blocking_keys(row["country"], row["business_name_clean"], row["business_address_clean"], row.get("postal_code")))
+        for s1_id, row in s1_dict.items()
+    }
+    cand_keys_cache = {
+        cid: set(get_tight_blocking_keys(row["country"], row["business_name_clean"], row["business_address_clean"], row.get("postal_code")))
+        for cid, row in pool_dict.items()
+    }
+    print(f"Cached blocking keys for {len(s1_keys_cache):,} S1 and {len(cand_keys_cache):,} candidates in {time.time() - t_keys:.2f}s.")
 
     # Split into Train and Validation entities
     all_s1_list = list(s1_dict.keys())
@@ -166,6 +184,7 @@ def main():
 
     for s1_id in train_s1_ids:
         s1_row = s1_dict[s1_id]
+        s1_keys = s1_keys_cache.get(s1_id, set())
         true_ids = gt_mapping.get(s1_id, set())
         cands = s1_candidates.get(s1_id, [])
 
@@ -178,14 +197,17 @@ def main():
             if not cand_row:
                 continue
 
+            c_keys = cand_keys_cache.get(cid, set())
+            shared_keys = len(s1_keys & c_keys) if (s1_keys and c_keys) else 1
+
             is_match = 1 if cid in true_ids else 0
             if is_match:
-                feats = extract_pair_features(s1_row, cand_row, cand_rank=rank)
+                feats = extract_pair_features(s1_row, cand_row, cand_rank=rank, shared_key_count=shared_keys)
                 X_train_list.append([feats[f] for f in FEATURE_NAMES])
                 y_train_list.append(1)
                 pos_count += 1
             elif neg_count < max_neg:
-                feats = extract_pair_features(s1_row, cand_row, cand_rank=rank)
+                feats = extract_pair_features(s1_row, cand_row, cand_rank=rank, shared_key_count=shared_keys)
                 X_train_list.append([feats[f] for f in FEATURE_NAMES])
                 y_train_list.append(0)
                 neg_count += 1
@@ -198,12 +220,15 @@ def main():
     val_s1_candidates: Dict[str, List[Tuple[str, np.ndarray]]] = {}
     for s1_id in val_s1_ids:
         s1_row = s1_dict[s1_id]
+        s1_keys = s1_keys_cache.get(s1_id, set())
         cands = s1_candidates.get(s1_id, [])
         pair_list = []
         for rank, cid in enumerate(cands):
             cand_row = pool_dict.get(cid)
             if cand_row:
-                feats = extract_pair_features(s1_row, cand_row, cand_rank=rank)
+                c_keys = cand_keys_cache.get(cid, set())
+                shared_keys = len(s1_keys & c_keys) if (s1_keys and c_keys) else 1
+                feats = extract_pair_features(s1_row, cand_row, cand_rank=rank, shared_key_count=shared_keys)
                 pair_list.append((cid, np.array([feats[f] for f in FEATURE_NAMES], dtype=np.float32)))
         val_s1_candidates[s1_id] = pair_list
 
@@ -222,27 +247,30 @@ def main():
     print("\nTop Feature Importances (Gain):")
     importances = clf.feature_importances_
     sorted_idx = np.argsort(importances)[::-1]
-    for i in sorted_idx[:8]:
+    for i in sorted_idx[:10]:
         print(f"  {FEATURE_NAMES[i]:25s}: {importances[i]:.1f}")
 
     # ----------------------------------------------------------------------
-    # Step 4: Optimize Threshold for Macro F_0.5
+    # Step 4: Two-Phase Optimization for Macro F_0.5
     # ----------------------------------------------------------------------
     print("\n" + "=" * 60)
-    print("STEP 4: OPTIMIZING DECISION THRESHOLD FOR MACRO F_0.5")
+    print("STEP 4: TWO-PHASE THRESHOLD SEARCH FOR MACRO F_0.5")
     print("=" * 60)
 
-    best_thresh, best_f05, history = find_optimal_threshold_for_f05(
+    best_thresh, best_f05, history = find_optimal_threshold_two_phase(
         clf, val_s1_ids, val_s1_candidates, gt_mapping,
-        threshold_range=np.arange(0.40, 0.92, 0.02)
+        coarse_range=np.arange(0.35, 0.90, 0.05),
+        fine_radius=0.04,
+        fine_step=0.005
     )
 
-    print("\nThreshold Search Results:")
-    for th in sorted(history.keys()):
+    print("\nTop Threshold Search Results around Peak:")
+    sorted_th = sorted(history.keys(), key=lambda t: history[t], reverse=True)
+    for th in sorted_th[:10]:
         marker = " <--- OPTIMAL" if abs(th - best_thresh) < 1e-4 else ""
-        print(f"  Threshold {th:.2f}: Macro F_0.5 = {history[th]:.4f}{marker}")
+        print(f"  Threshold {th:.3f}: Macro F_0.5 = {history[th]:.4f}{marker}")
 
-    print(f"\n>>> Best Decision Threshold: {best_thresh:.2f} (Macro F_0.5 = {best_f05:.4f}) <<<")
+    print(f"\n>>> Best Decision Threshold: {best_thresh:.3f} (Macro F_0.5 = {best_f05:.4f}) <<<")
 
     # Evaluate detailed metrics at best threshold
     val_pred_mapping = {}

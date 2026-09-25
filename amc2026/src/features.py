@@ -132,7 +132,36 @@ def extract_pair_features(
         num_overlap = 0.0
         num_mismatch = 0.0
 
-    # --- 3. Metadata & Source Features ---
+    # --- 3. Postal Code Features ---
+    p1 = s1_row.get("postal_code")
+    p2 = cand_row.get("postal_code")
+
+    if not p1 or str(p1).strip() in ("POSTAL_MISSING", "nan", "None", ""):
+        from postal import extract_postal_code
+        p1 = extract_postal_code(addr1, s1_row.get("country", ""))
+    if not p2 or str(p2).strip() in ("POSTAL_MISSING", "nan", "None", ""):
+        from postal import extract_postal_code
+        p2 = extract_postal_code(addr2, cand_row.get("country", ""))
+
+    has_p1 = bool(p1 and str(p1).strip() not in ("POSTAL_MISSING", "nan", "None", ""))
+    has_p2 = bool(p2 and str(p2).strip() not in ("POSTAL_MISSING", "nan", "None", ""))
+    postal_both_present = 1.0 if (has_p1 and has_p2) else 0.0
+
+    if postal_both_present:
+        str_p1 = str(p1).strip()
+        str_p2 = str(p2).strip()
+        postal_exact_match = 1.0 if str_p1 == str_p2 else 0.0
+        pref_len = 4 if (len(str_p1) == 6 and len(str_p2) == 6) else 3
+        postal_prefix_match = 1.0 if (
+            not postal_exact_match and
+            len(str_p1) >= pref_len and len(str_p2) >= pref_len and
+            str_p1[:pref_len] == str_p2[:pref_len]
+        ) else 0.0
+    else:
+        postal_exact_match = 0.0
+        postal_prefix_match = 0.0
+
+    # --- 4. Metadata & Source Features ---
     is_s2 = 1.0 if cand_id.startswith("S2-") else 0.0
     is_s3 = 1.0 if cand_id.startswith("S3-") else 0.0
 
@@ -152,6 +181,9 @@ def extract_pair_features(
         "addr_both_have_nums": both_have_nums,
         "addr_num_overlap": num_overlap,
         "addr_num_mismatch": num_mismatch,
+        "postal_both_present": postal_both_present,
+        "postal_exact_match": postal_exact_match,
+        "postal_prefix_match": postal_prefix_match,
         "is_s2": is_s2,
         "is_s3": is_s3,
         "cand_rank": float(cand_rank),

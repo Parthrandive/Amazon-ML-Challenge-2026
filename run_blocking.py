@@ -21,7 +21,9 @@ sys.path.append(os.path.abspath("amc2026/src"))
 from blocking import (
     get_name_tokens,
     get_address_tokens,
-    get_tight_blocking_keys
+    get_tight_blocking_keys,
+    get_adaptive_block_cap,
+    fast_combined_similarity
 )
 
 os.makedirs("outputs", exist_ok=True)
@@ -158,7 +160,7 @@ for country in countries:
                 keys = get_tight_blocking_keys(country, c_name, str(r.business_address_clean))
                 for k in keys:
                     lst = index[k]
-                    if len(lst) < MAX_BLOCK_SIZE:
+                    if len(lst) < get_adaptive_block_cap(k):
                         lst.append(idx)
 
     print(f"  Indexed {len(pool_id_list):,} {country} pool records ({len(index):,} keys) in {time.time() - t_c:.1f}s.")
