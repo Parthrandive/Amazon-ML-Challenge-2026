@@ -9,10 +9,30 @@ from typing import Optional
 import pandas as pd
 from transliterate import detect_script, transliterate_name
 
+import unicodedata
+
+def strip_accents(text: str) -> str:
+    """Converts accented Latin characters to plain ASCII base characters (e.g. é -> e, à -> a, ç -> c)."""
+    if not text:
+        return ""
+    return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
+
 # ---------------------------------------------------------
-# Regex patterns for English legal suffixes
+# Regex patterns for English and French legal suffixes
 # ---------------------------------------------------------
 LEGAL_SUFFIXES_EN = [
+    # French corporate forms (spaced, dotted, and concatenated)
+    r"societe\s+anonyme",
+    r"societe\s+par\s+actions\s+simplifiee",
+    r"societe\s+a\s+responsabilite\s+limitee",
+    r"s\s*a\s*r\s*l",
+    r"s\s*a\s*s",
+    r"s\s*c\s*i",
+    r"e\s*u\s*r\s*l",
+    r"s\s*n\s*c",
+    r"groupe",
+    r"s\s*a",
+    # English forms
     r"private\s+limited",
     r"pvt\s+limited",
     r"pvt\s+ltd",
@@ -81,18 +101,21 @@ RD_RE = re.compile(r"\brd\b\.?", re.IGNORECASE)
 AVE_RE = re.compile(r"\bave\b\.?", re.IGNORECASE)
 DR_RE = re.compile(r"\bdr\b\.?", re.IGNORECASE)
 APT_RE = re.compile(r"\bapt\b\.?", re.IGNORECASE)
+BVD_RE = re.compile(r"\b(bd|bld|blvd)\b\.?", re.IGNORECASE)
+RUE_RE = re.compile(r"\br\b\.?", re.IGNORECASE)
+ALL_RE = re.compile(r"\ball\b\.?", re.IGNORECASE)
 WHITESPACE_RE = re.compile(r"\s+")
 NAME_PUNCT_RE = re.compile(r"[^\w\s\u0900-\u0D7F]")
 
 
 def normalize_name(name: Optional[str]) -> str:
     """
-    lowercase, strip punctuation, collapse whitespace, strip legal suffixes
-    (Inc, LLC, Ltd, Limited, PC, Corp, Co, LLP, Pvt, Private Limited — English forms first).
+    lowercase, strip accents/diacritics, strip punctuation, collapse whitespace,
+    strip legal suffixes (English & French forms).
     """
     if not isinstance(name, str) or not name.strip():
         return ""
-    s = name.lower()
+    s = strip_accents(name.lower())
     s = re.sub(r"&", " and ", s)
     s = NAME_PUNCT_RE.sub(" ", s).replace("_", " ")
     s = WHITESPACE_RE.sub(" ", s).strip()
@@ -123,18 +146,21 @@ def normalize_translit_suffix(text: Optional[str]) -> str:
 
 def normalize_address(address: Optional[str]) -> str:
     """
-    lowercase, strip punctuation except commas, standardize abbreviations
-    (St/Rd/Ave/Dr/Apt), collapse whitespace.
+    lowercase, strip accents/diacritics, strip punctuation except commas,
+    standardize abbreviations (St/Rd/Ave/Dr/Apt/Bd/Rue/Allee), collapse whitespace.
     """
     if not isinstance(address, str) or not address.strip():
         return ""
-    s = address.lower()
+    s = strip_accents(address.lower())
     s = ADDR_PUNCT_RE.sub(" ", s).replace("_", " ")
     s = ST_RE.sub("street", s)
     s = RD_RE.sub("road", s)
     s = AVE_RE.sub("avenue", s)
     s = DR_RE.sub("drive", s)
     s = APT_RE.sub("apartment", s)
+    s = BVD_RE.sub("boulevard", s)
+    s = RUE_RE.sub("rue", s)
+    s = ALL_RE.sub("allee", s)
     return WHITESPACE_RE.sub(" ", s).strip()
 
 
