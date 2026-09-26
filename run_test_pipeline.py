@@ -106,39 +106,59 @@ def stage2_blocking_test():
         print(f"\n--- Processing Partition: {country} ---")
         t_c = time.time()
 
-        # Build adaptive-depth index for this country from S2 and S3
-        # Uses raw file streaming instead of pandas for ~3-5x speedup
-        pool_id_list = []
-        pool_names = []
-        index = defaultdict(lambda: array.array("I"))
+        # Build independent indices for Source 2 and Source 3
+        # Guarantees zero candidate starvation of S3 by S2
+        s2_id_list = []
+        s2_names = []
+        s2_index = defaultdict(lambda: array.array("I"))
+        with open(s2_clean_path, "r", encoding="utf-8") as f:
+            header = next(f).rstrip("\n").split("\t")
+            id_idx = header.index("entity_id")
+            country_idx = header.index("country")
+            name_idx = header.index("business_name_clean")
+            addr_idx = header.index("business_address_clean")
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) <= country_idx or parts[country_idx] != country:
+                    continue
+                idx = len(s2_id_list)
+                s2_id_list.append(parts[id_idx])
+                c_name = parts[name_idx] if len(parts) > name_idx and parts[name_idx] not in ("", "nan", "None") else ""
+                s2_names.append(c_name)
+                c_addr = parts[addr_idx] if len(parts) > addr_idx else ""
+                keys = get_tight_blocking_keys(country, c_name, c_addr)
+                for k in keys:
+                    lst = s2_index[k]
+                    if len(lst) < get_key_max_size(k):
+                        lst.append(idx)
 
-        for pool_name, path in [("Source 2", s2_clean_path), ("Source 3", s3_clean_path)]:
-            with open(path, "r", encoding="utf-8") as f:
-                header = next(f).rstrip("\n").split("\t")
-                id_idx = header.index("entity_id")
-                country_idx = header.index("country")
-                name_idx = header.index("business_name_clean")
-                addr_idx = header.index("business_address_clean")
-                for line in f:
-                    parts = line.rstrip("\n").split("\t")
-                    if len(parts) <= country_idx or parts[country_idx] != country:
-                        continue
-                    idx = len(pool_id_list)
-                    pool_id_list.append(parts[id_idx])
-                    c_name = parts[name_idx] if len(parts) > name_idx and parts[name_idx] not in ("", "nan", "None") else ""
-                    pool_names.append(c_name)
+        s3_id_list = []
+        s3_names = []
+        s3_index = defaultdict(lambda: array.array("I"))
+        with open(s3_clean_path, "r", encoding="utf-8") as f:
+            header = next(f).rstrip("\n").split("\t")
+            id_idx = header.index("entity_id")
+            country_idx = header.index("country")
+            name_idx = header.index("business_name_clean")
+            addr_idx = header.index("business_address_clean")
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) <= country_idx or parts[country_idx] != country:
+                    continue
+                idx = len(s3_id_list)
+                s3_id_list.append(parts[id_idx])
+                c_name = parts[name_idx] if len(parts) > name_idx and parts[name_idx] not in ("", "nan", "None") else ""
+                s3_names.append(c_name)
+                c_addr = parts[addr_idx] if len(parts) > addr_idx else ""
+                keys = get_tight_blocking_keys(country, c_name, c_addr)
+                for k in keys:
+                    lst = s3_index[k]
+                    if len(lst) < get_key_max_size(k):
+                        lst.append(idx)
 
-                    c_addr = parts[addr_idx] if len(parts) > addr_idx else ""
-                    keys = get_tight_blocking_keys(country, c_name, c_addr)
-                    for k in keys:
-                        lst = index[k]
-                        max_cap = get_key_max_size(k)
-                        if len(lst) < max_cap:
-                            lst.append(idx)
+        print(f"  Indexed {country}: S2={len(s2_id_list):,} records ({len(s2_index):,} keys), S3={len(s3_id_list):,} records ({len(s3_index):,} keys) in {time.time() - t_c:.1f}s.")
 
-        print(f"  Indexed {len(pool_id_list):,} {country} pool records ({len(index):,} keys) in {time.time() - t_c:.1f}s.")
-
-        # Query S1 for this country — also raw file streaming
+        # Query S1 for this country — raw file streaming
         t_q = time.time()
         c_s1_count = 0
         c_cand_count = 0
@@ -168,23 +188,31 @@ def stage2_blocking_test():
                     s1_g1 = {s1_name[i:i + 3] for i in range(len1 - 2)} if len1 >= 3 else {s1_name}
 
                     keys = get_tight_blocking_keys(country, s1_name, s1_addr)
-                    cand_counts = Counter()
-                    for k in keys:
-                        cand_counts.update(index.get(k, ()))
 
-                    if not cand_counts:
+                    # Query S2 index
+                    cands_s2 = Counter()
+                    for k in keys:
+                        cands_s2.update(s2_index.get(k, ()))
+
+                    # Query S3 index
+                    cands_s3 = Counter()
+                    for k in keys:
+                        cands_s3.update(s3_index.get(k, ()))
+
+                    if not cands_s2 and not cands_s3:
                         clean_lines.append(f"{s1_id}\t\n")
                         counts_lines.append(f"{s1_id}\t\n")
                         c_s1_count += 1
                         continue
 
-                    if len(cand_counts) <= K_CUTOFF:
-                        selected_ids = [c for c, _ in cand_counts.most_common(K_CUTOFF)]
+                    # Select top candidates from S2 (quota = 18)
+                    if len(cands_s2) <= 18:
+                        sel_s2 = [i for i, _ in cands_s2.most_common(18)]
                     else:
-                        top_cands = [c for c, _ in cand_counts.most_common(60)]
-                        scored = []
-                        for int_id in top_cands:
-                            c_name = pool_names[int_id]
+                        top_s2 = [i for i, _ in cands_s2.most_common(50)]
+                        scored_s2 = []
+                        for int_id in top_s2:
+                            c_name = s2_names[int_id]
                             if s1_name == c_name:
                                 sim = 1.0
                             else:
@@ -196,18 +224,40 @@ def stage2_blocking_test():
                                 u_tok = s1_toks | toks2
                                 j_tok = len(s1_toks & toks2) / len(u_tok) if u_tok else 0.0
                                 sim = 0.6 * j_char + 0.4 * j_tok
+                            scored_s2.append((int_id, sim + 0.15 * cands_s2[int_id]))
+                        scored_s2.sort(key=lambda x: x[1], reverse=True)
+                        sel_s2 = [int_id for int_id, _ in scored_s2[:18]]
 
-                            scored.append((int_id, sim + 0.15 * cand_counts[int_id]))
+                    # Select top candidates from S3 (quota = 18)
+                    if len(cands_s3) <= 18:
+                        sel_s3 = [i for i, _ in cands_s3.most_common(18)]
+                    else:
+                        top_s3 = [i for i, _ in cands_s3.most_common(50)]
+                        scored_s3 = []
+                        for int_id in top_s3:
+                            c_name = s3_names[int_id]
+                            if s1_name == c_name:
+                                sim = 1.0
+                            else:
+                                len2 = len(c_name)
+                                g2 = {c_name[i:i + 3] for i in range(len2 - 2)} if len2 >= 3 else {c_name}
+                                u = s1_g1 | g2
+                                j_char = len(s1_g1 & g2) / len(u) if u else 0.0
+                                toks2 = set(c_name.split())
+                                u_tok = s1_toks | toks2
+                                j_tok = len(s1_toks & toks2) / len(u_tok) if u_tok else 0.0
+                                sim = 0.6 * j_char + 0.4 * j_tok
+                            scored_s3.append((int_id, sim + 0.15 * cands_s3[int_id]))
+                        scored_s3.sort(key=lambda x: x[1], reverse=True)
+                        sel_s3 = [int_id for int_id, _ in scored_s3[:18]]
 
-                        scored.sort(key=lambda x: x[1], reverse=True)
-                        selected_ids = [int_id for int_id, _ in scored[:K_CUTOFF]]
+                    # Format candidates and counts
+                    cand_ids_clean = [s2_id_list[i] for i in sel_s2] + [s3_id_list[i] for i in sel_s3]
+                    cand_ids_counts = [f"{s2_id_list[i]}:{cands_s2[i]}" for i in sel_s2] + [f"{s3_id_list[i]}:{cands_s3[i]}" for i in sel_s3]
 
-                    cand_str_clean = ",".join(pool_id_list[i] for i in selected_ids)
-                    cand_str_counts = ",".join(f"{pool_id_list[i]}:{cand_counts[i]}" for i in selected_ids)
-
-                    c_cand_count += len(selected_ids)
-                    clean_lines.append(f"{s1_id}\t{cand_str_clean}\n")
-                    counts_lines.append(f"{s1_id}\t{cand_str_counts}\n")
+                    c_cand_count += len(cand_ids_clean)
+                    clean_lines.append(f"{s1_id}\t{','.join(cand_ids_clean)}\n")
+                    counts_lines.append(f"{s1_id}\t{','.join(cand_ids_counts)}\n")
                     c_s1_count += 1
 
                     if len(clean_lines) >= 10000:
@@ -231,9 +281,8 @@ def stage2_blocking_test():
         total_s1 += c_s1_count
         total_cands += c_cand_count
 
-        del pool_id_list, pool_names, index
+        del s2_id_list, s2_names, s2_index, s3_id_list, s3_names, s3_index
         gc.collect()
-
 
     print(f"\nAdaptive blocking completed in {time.time() - t_start:.2f}s.")
     print(f"Total S1 entities: {total_s1:,} | Total candidate pairs: {total_cands:,} (avg {total_cands/total_s1:.2f}/entity)")
