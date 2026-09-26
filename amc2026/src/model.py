@@ -57,27 +57,16 @@ def find_optimal_threshold_for_f05(
     val_s1_ids: List[str],
     s1_to_candidates: Dict[str, List[Tuple[str, np.ndarray]]],
     gt_mapping: Dict[str, Set[str]],
-    threshold_range: np.ndarray = np.arange(0.35, 0.90, 0.02)
+    broad_points: int = 90,
+    fine_points: int = 61
 ) -> Tuple[float, float, Dict[float, float]]:
     """
-    Evaluates candidate predictions across a grid of thresholds to maximize
-    the official competition macro-averaged F_0.5 score.
-    
-    Parameters:
-    -----------
-    clf: trained classifier with predict_proba
-    val_s1_ids: list of Source 1 entity IDs in the validation set
-    s1_to_candidates: mapping from s1_id to list of (cand_id, feature_vector)
-    gt_mapping: dict mapping s1_id to set of true matched_entity_ids
-    threshold_range: array of candidate probability thresholds
-    
-    Returns:
-    --------
-    (best_threshold, best_macro_f05, threshold_scores_dict)
+    Evaluates candidate predictions across a two-phase count-based grid
+    (broad 0.10 to 0.99 inclusive, then fine-grained around peak) to maximize Macro F_0.5.
+    Avoids floating-point accumulation bugs.
     """
     # Precompute model probabilities for all candidate pairs in validation
     s1_cand_probs: Dict[str, List[Tuple[str, float]]] = {}
-    
     for s1_id in val_s1_ids:
         cands = s1_to_candidates.get(s1_id, [])
         if not cands:
@@ -88,36 +77,70 @@ def find_optimal_threshold_for_f05(
         probs = clf.predict_proba(X)[:, 1]
         s1_cand_probs[s1_id] = list(zip(cand_ids, probs))
 
-    best_thresh = 0.5
-    best_f05 = -1.0
-    history = {}
-
     n_val = len(val_s1_ids)
 
-    for thresh in threshold_range:
+    def eval_threshold(thresh: float) -> float:
         total_f05 = 0.0
         for s1_id in val_s1_ids:
             gt_set = gt_mapping.get(s1_id, set())
             cands = s1_cand_probs.get(s1_id, [])
             pred_set = {cid for cid, p in cands if p >= thresh}
-            
             total_f05 += compute_entity_f05(gt_set, pred_set)
-        
-        macro_score = total_f05 / n_val if n_val > 0 else 0.0
-        history[float(thresh)] = macro_score
-        
-        if macro_score > best_f05:
-            best_f05 = macro_score
-            best_thresh = float(thresh)
+        return total_f05 / n_val if n_val > 0 else 0.0
+
+    # Phase 1: Broad count-based search from 0.10 to 0.99 inclusive
+    broad_grid = np.linspace(0.10, 0.99, broad_points)
+    history = {}
+    best_broad_thresh = 0.5
+    best_broad_f05 = -1.0
+
+    for th in broad_grid:
+        r_th = round(float(th), 4)
+        score = eval_threshold(r_th)
+        history[r_th] = score
+        if score > best_broad_f05:
+            best_broad_f05 = score
+            best_broad_thresh = r_th
+
+    # Phase 2: Fine search around broad winner (+/- 0.06 with fine steps ~0.002)
+    fine_min = max(0.01, best_broad_thresh - 0.06)
+    fine_max = min(0.999, best_broad_thresh + 0.06)
+    fine_grid = np.linspace(fine_min, fine_max, fine_points)
+
+    best_thresh = best_broad_thresh
+    best_f05 = best_broad_f05
+
+    for th in fine_grid:
+        r_th = round(float(th), 4)
+        if r_th not in history:
+            score = eval_threshold(r_th)
+            history[r_th] = score
+        else:
+            score = history[r_th]
+
+        if score > best_f05:
+            best_f05 = score
+            best_thresh = r_th
 
     return best_thresh, best_f05, history
 
 
-def save_matcher_model(clf: lgb.LGBMClassifier, threshold: float, filepath: str):
-    """Saves trained model and optimal threshold to disk."""
+def save_matcher_model(
+    clf: lgb.LGBMClassifier,
+    threshold: float,
+    filepath: str,
+    country_thresholds: Optional[Dict[str, float]] = None,
+    margin_params: Optional[Dict[str, float]] = None
+):
+    """Saves trained model, global threshold, and optional per-country / margin thresholds to disk."""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     with open(filepath, "wb") as f:
-        pickle.dump({"model": clf, "threshold": threshold}, f)
+        pickle.dump({
+            "model": clf,
+            "threshold": threshold,
+            "country_thresholds": country_thresholds or {},
+            "margin_params": margin_params or {}
+        }, f)
 
 
 def load_matcher_model(filepath: str) -> Tuple[lgb.LGBMClassifier, float]:
@@ -125,6 +148,18 @@ def load_matcher_model(filepath: str) -> Tuple[lgb.LGBMClassifier, float]:
     with open(filepath, "rb") as f:
         data = pickle.load(f)
     return data["model"], data["threshold"]
+
+
+def load_matcher_model_full(filepath: str) -> Tuple[lgb.LGBMClassifier, float, Dict[str, float], Dict[str, float]]:
+    """Loads trained model, global threshold, per-country thresholds, and margin parameters."""
+    with open(filepath, "rb") as f:
+        data = pickle.load(f)
+    return (
+        data["model"],
+        data.get("threshold", 0.6),
+        data.get("country_thresholds", {}),
+        data.get("margin_params", {})
+    )
 
 
 if __name__ == "__main__":

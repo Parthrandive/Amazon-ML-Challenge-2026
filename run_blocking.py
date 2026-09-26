@@ -21,7 +21,8 @@ sys.path.append(os.path.abspath("amc2026/src"))
 from blocking import (
     get_name_tokens,
     get_address_tokens,
-    get_tight_blocking_keys
+    get_tight_blocking_keys,
+    get_fallback_blocking_keys,
 )
 
 os.makedirs("outputs", exist_ok=True)
@@ -42,7 +43,7 @@ sample_index = defaultdict(list)
 for cid, cand in pool_dict.items():
     name = str(cand.get("business_name_clean", ""))
     addr = str(cand.get("business_address_clean", ""))
-    for k in get_tight_blocking_keys(cand["country"], name, addr):
+    for k in get_tight_blocking_keys(cand.get("country_extracted", cand["country"]), name, addr):
         sample_index[k].append(cid)
 
 k_hits = {5: 0, 10: 0, 15: 0, 20: 0, 25: 0, 30: 0, 50: 0}
@@ -59,7 +60,7 @@ for _, r in sample_gt.iterrows():
     len1 = len(s1_name)
     s1_g1 = {s1_name[i:i + 3] for i in range(len1 - 2)} if len1 >= 3 else {s1_name}
 
-    keys = get_tight_blocking_keys(s1["country"], s1_name, s1_addr)
+    keys = get_tight_blocking_keys(s1.get("country_extracted", s1["country"]), s1_name, s1_addr)
 
     cand_counts = Counter()
     for k in keys:
@@ -128,7 +129,8 @@ with open(out_file, "w", encoding="utf-8") as f_out:
 
 # Detect unique countries from Source 1
 s1_clean_path = "data/processed/source1_clean.tsv"
-countries = ["India", "US"]  # Will dynamically process all countries in data
+country_column = "country_extracted"
+countries = ["India", "US", "France"]
 print(f"Target country partitions: {countries}")
 
 total_s1_processed = 0
@@ -147,8 +149,8 @@ for country in countries:
     for pool_name, path in [("Source 2", "data/processed/source2_clean.tsv"),
                             ("Source 3", "data/processed/source3_clean.tsv")]:
         for chunk in pd.read_csv(path, sep="\t", chunksize=500000,
-                                 usecols=["entity_id", "country", "business_name_clean", "business_address_clean"]):
-            country_chunk = chunk[chunk["country"] == country]
+                                 usecols=["entity_id", country_column, "business_name_clean", "business_address_clean"]):
+            country_chunk = chunk[chunk[country_column] == country]
             for r in country_chunk.itertuples(index=False):
                 idx = len(pool_id_list)
                 pool_id_list.append(r.entity_id)
@@ -170,8 +172,8 @@ for country in countries:
 
     with open(out_file, "a", encoding="utf-8") as f_out:
         for chunk in pd.read_csv(s1_clean_path, sep="\t", chunksize=CHUNK_SIZE,
-                                 usecols=["entity_id", "country", "business_name_clean", "business_address_clean"]):
-            country_chunk = chunk[chunk["country"] == country]
+                                 usecols=["entity_id", country_column, "business_name_clean", "business_address_clean"]):
+            country_chunk = chunk[chunk[country_column] == country]
             if country_chunk.empty:
                 continue
 
@@ -235,6 +237,45 @@ for country in countries:
     # Free memory before next country
     del pool_id_list, pool_names, index
     gc.collect()
+
+# Unknown-country entities are never discarded.  They receive candidates from a bounded
+# cross-partition name/phonetic index, while records with extracted countries remain in
+# their tighter country partitions above.
+print("\n--- Processing cross-partition unknown-country fallback ---")
+fallback_ids, fallback_names = [], []
+fallback_index = defaultdict(lambda: array.array("I"))
+for path in ("data/processed/source2_clean.tsv", "data/processed/source3_clean.tsv"):
+    for chunk in pd.read_csv(path, sep="\t", chunksize=500000,
+                             usecols=["entity_id", "business_name_clean"]):
+        for row in chunk.itertuples(index=False):
+            idx = len(fallback_ids)
+            fallback_ids.append(row.entity_id)
+            name = str(row.business_name_clean) if pd.notna(row.business_name_clean) else ""
+            fallback_names.append(name)
+            for key in get_fallback_blocking_keys(name):
+                bucket = fallback_index[key]
+                if len(bucket) < MAX_BLOCK_SIZE:
+                    bucket.append(idx)
+
+unknown_entities = 0
+unknown_candidates = 0
+with open(out_file, "a", encoding="utf-8") as f_out:
+    for chunk in pd.read_csv(s1_clean_path, sep="\t", chunksize=CHUNK_SIZE,
+                             usecols=["entity_id", country_column, "business_name_clean"]):
+        lines = []
+        for row in chunk[chunk[country_column] == "unknown"].itertuples(index=False):
+            name = str(row.business_name_clean) if pd.notna(row.business_name_clean) else ""
+            counts = Counter()
+            for key in get_fallback_blocking_keys(name):
+                counts.update(fallback_index.get(key, ()))
+            selected = [idx for idx, _ in counts.most_common(K_CUTOFF)]
+            lines.append(f"{row.entity_id}\t{','.join(fallback_ids[idx] for idx in selected)}\n")
+            unknown_entities += 1
+            unknown_candidates += len(selected)
+        f_out.writelines(lines)
+total_s1_processed += unknown_entities
+total_candidate_pairs += unknown_candidates
+print(f"  Completed fallback: {unknown_entities:,} entities, {unknown_candidates:,} candidates.")
 
 print(f"\nAll countries processed in {time.time() - t_start:.2f}s.")
 print(f"Total Source 1 entities processed: {total_s1_processed:,}")

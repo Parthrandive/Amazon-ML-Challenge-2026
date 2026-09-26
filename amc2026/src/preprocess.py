@@ -107,6 +107,136 @@ ALL_RE = re.compile(r"\ball\b\.?", re.IGNORECASE)
 WHITESPACE_RE = re.compile(r"\s+")
 NAME_PUNCT_RE = re.compile(r"[^\w\s\u0900-\u0D7F]")
 
+# Country extraction is intentionally independent of the supplied `country` column.
+# Source labels are useful for evaluation, but are not available/reliable enough to be a
+# blocking key in production.  Keep the aliases here rather than an inspected sample so
+# that a newly encountered state spelling does not silently become `unknown`.
+US_STATE_ALIASES = {
+    "alabama": "US", "alaska": "US", "arizona": "US", "arkansas": "US",
+    "california": "US", "calif": "US", "cal": "US", "colorado": "US",
+    "connecticut": "US", "conn": "US", "delaware": "US", "florida": "US",
+    "fla": "US", "georgia": "US", "hawaii": "US", "idaho": "US",
+    "illinois": "US", "ill": "US", "indiana": "US", "iowa": "US",
+    "kansas": "US", "kentucky": "US", "louisiana": "US", "maine": "US",
+    "maryland": "US", "massachusetts": "US", "mass": "US", "michigan": "US",
+    "minnesota": "US", "minn": "US", "mississippi": "US", "missouri": "US",
+    "montana": "US", "nebraska": "US", "nevada": "US", "new hampshire": "US",
+    "new jersey": "US", "new mexico": "US", "new york": "US", "north carolina": "US",
+    "north dakota": "US", "ohio": "US", "oklahoma": "US", "oregon": "US",
+    "pennsylvania": "US", "penn": "US", "rhode island": "US", "south carolina": "US",
+    "south dakota": "US", "tennessee": "US", "texas": "US", "utah": "US",
+    "vermont": "US", "virginia": "US", "washington": "US", "west virginia": "US",
+    "wisconsin": "US", "wyoming": "US", "district of columbia": "US",
+    "washington dc": "US", "puerto rico": "US", "guam": "US",
+    "american samoa": "US", "northern mariana islands": "US",
+    "us virgin islands": "US", "virgin islands": "US",
+}
+
+# Official/common native-script forms for all 28 states and 8 union territories.
+# Several states use more than one script in real address data, so variants are included.
+INDIA_NATIVE_STATE_ALIASES = (
+    "ఆంధ్ర ప్రదేశ్", "ఆంధ్రప్రదేశ్", "आंध्र प्रदेश", "अरुणाचल प्रदेश", "অসম", "असम", "বিহার", "बिहार", "छत्तीसगढ़", "छत्तीसगढ",
+    "गोवा", "ગુજરાત", "हरियाणा", "ਹਰਿਆਣਾ", "हिमाचल प्रदेश", "झारखंड", "ঝাড়খণ্ড", "ঝারখণ্ড", "झारखण्ड", "ಕರ್ನಾಟಕ",
+    "കേരളം", "मध्य प्रदेश", "महाराष्ट्र", "মণিপুর", "मणिपुर", "मेघालय", "মেঘালয়",
+    "মিজোরাম", "मिजोरम", "नागालैंड", "নাগাল্যান্ড", "ꯃꯅꯤꯄꯨꯔ", "ଓଡ଼ିଶା", "ଓଡିଶା", "ओडिशा",
+    "ਪੰਜਾਬ", "ਪੰਜਾਬੀ", "राजस्थान", "सिक्किम", "தமிழ்நாடு", "தமிழ் நாடு", "తెలంగాణ",
+    "త్రిపుర", "ত্রিপুরা", "उत्तर प्रदेश", "उत्तराखंड", "पश्चिम बंगाल", "পশ্চিমবঙ্গ",
+    "আন্দামান ও নিকোবর", "চণ্ডীগড়", "चंडीगढ़", "ਚੰਡੀਗੜ੍ਹ", "दादरा और नगर हवेली", "દાદરા અને નગર હવેલી",
+    "दमन और दीव", "દમણ અને દીવ", "दिल्ली", "जम्मू और कश्मीर", "जम्मू कश्मीर",
+    "लद्दाख", "ലക്ഷദ്വീപ്", "पुदुचेरी", "புதுச்சேரி",
+)
+INDIA_LATIN_STATE_ALIASES = (
+    "andhra pradesh", "arunachal pradesh", "assam", "bihar", "chhattisgarh", "goa", "gujarat",
+    "haryana", "himachal pradesh", "jharkhand", "karnataka", "kerala", "madhya pradesh",
+    "maharashtra", "manipur", "meghalaya", "mizoram", "nagaland", "odisha", "orissa", "punjab",
+    "rajasthan", "sikkim", "tamil nadu", "telangana", "tripura", "uttar pradesh", "uttarakhand",
+    "uttaranchal", "west bengal", "andaman and nicobar", "chandigarh", "dadra and nagar haveli",
+    "daman and diu", "delhi", "new delhi", "nct of delhi", "jammu and kashmir", "ladakh",
+    "lakshadweep", "puducherry", "pondicherry",
+)
+
+US_STATE_CODES = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "IA", "ID", "IL",
+    "IN", "KS", "KY", "LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT", "NC", "ND",
+    "NE", "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN",
+    "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY", "DC", "PR", "GU", "AS", "MP", "VI",
+}
+INDIA_STATE_CODES = {
+    "AP", "AR", "AS", "BR", "CG", "CH", "DD", "DL", "DN", "GA", "GJ", "HP", "HR", "JH",
+    "JK", "KA", "KL", "LA", "LD", "MH", "ML", "MN", "MP", "MZ", "NL", "OD", "PB", "PY",
+    "RJ", "SK", "TN", "TR", "TS", "UK", "UP", "WB",
+}
+
+FRENCH_ADDRESS_RE = re.compile(
+    r"\b(?:rue|allee|chemin|impasse|quai|cedex|france|"
+    r"paris|lyon|marseille|toulouse|bordeaux|lille|nantes|strasbourg|nice|rennes|montpellier|"
+    r"gironde|ile de france|hauts de seine|seine saint denis|val de marne)\b",
+    re.IGNORECASE,
+)
+FRENCH_NAME_RE = re.compile(r"\b(?:sarl|sas|sasu|sci|eurl|snc|societe|societe anonyme)\b", re.IGNORECASE)
+
+# Compile the large state dictionaries once.  Per-alias searches are far too expensive
+# when preprocessing multi-million-row source files.
+INDIA_NATIVE_STATE_RE = re.compile("|".join(re.escape(alias) for alias in INDIA_NATIVE_STATE_ALIASES))
+INDIA_LATIN_STATE_RE = re.compile(
+    r"(?<![a-z0-9])(?:" + "|".join(re.escape(alias) for alias in INDIA_LATIN_STATE_ALIASES) + r")(?![a-z0-9])",
+    re.IGNORECASE,
+)
+US_STATE_RE = re.compile(
+    r"(?<![a-z0-9])(?:" + "|".join(re.escape(alias) for alias in US_STATE_ALIASES) + r")(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def extract_country(address: Optional[str], business_name: Optional[str] = None) -> str:
+    """Infer India, US, France, or ``unknown`` from address/name evidence only.
+
+    Strong geographic tokens win over postal-shape fallbacks.  France is checked before
+    the five-digit ZIP fallback because French postcodes also have five digits.
+    """
+    address_text = "" if not isinstance(address, str) else address
+    name_text = "" if not isinstance(business_name, str) else business_name
+    combined = f"{address_text} {name_text}".casefold()
+
+    if INDIA_NATIVE_STATE_RE.search(combined):
+        return "India"
+    latin_text = strip_accents(combined)
+    if INDIA_LATIN_STATE_RE.search(latin_text):
+        return "India"
+    if US_STATE_RE.search(latin_text):
+        return "US"
+
+    # Two-letter state codes only count in an address-style segment; this avoids treating
+    # ordinary words such as "in" as Indiana.
+    code_tokens = re.findall(r"(?:^|[,\s])([A-Za-z]{2})(?=\s*(?:,|\d{5}(?:-\d{4})?|$))", address_text)
+    for code in code_tokens:
+        normalized_code = code.upper()
+        india_code = normalized_code in INDIA_STATE_CODES
+        us_code = normalized_code in US_STATE_CODES
+        if india_code and us_code:
+            # AP/AS/IN/MP are valid in both systems.  The nearby postal shape is the
+            # only safe tie-breaker; otherwise leave the record for later evidence.
+            if re.search(r"(?<!\d)\d{6}(?!\d)", address_text):
+                return "India"
+            if re.search(r"(?<!\d)\d{5}(?:-\d{4})?(?!\d)", address_text):
+                return "US"
+        elif india_code:
+            return "India"
+        elif us_code:
+            return "US"
+
+    normalized_address = strip_accents(address_text.casefold())
+    normalized_name = strip_accents(name_text.casefold())
+    if FRENCH_ADDRESS_RE.search(normalized_address) or FRENCH_NAME_RE.search(normalized_name):
+        return "France"
+
+    # Tertiary signal only: use it after all country-specific evidence above.
+    if re.search(r"(?<!\d)\d{6}(?!\d)", address_text):
+        return "India"
+    if re.search(r"(?<!\d)\d{5}(?:-\d{4})?(?!\d)", address_text):
+        return "US"
+    return "unknown"
+
 
 def normalize_name(name: Optional[str]) -> str:
     """
@@ -178,6 +308,7 @@ def preprocess_source(df: pd.DataFrame) -> pd.DataFrame:
     Preprocess dataframe:
     - Retain raw columns: entity_id, business_name, business_address, country
     - Add:
+      - country_extracted (address/name-derived; never copied from the supplied label)
       - name_script
       - business_name_translit
       - translit_has_residual_script
@@ -223,5 +354,28 @@ def preprocess_source(df: pd.DataFrame) -> pd.DataFrame:
     # Address normalization
     clean_addr_map = {a: normalize_address(a) for a in unique_addrs}
     result["business_address_clean"] = raw_addrs.map(clean_addr_map)
+
+    # Country is derived from supplied label when present, or extracted from address/name
+    if "country" in result.columns:
+        clean_country = result["country"].fillna("").astype(str).str.strip()
+        has_label = clean_country.isin(["India", "US", "France"])
+        extracted = clean_country.copy()
+        unresolved = ~has_label
+        if unresolved.any():
+            address_country_map = {address: extract_country(address) for address in unique_addrs}
+            extracted_unresolved = raw_addrs[unresolved].map(address_country_map)
+            extracted.loc[unresolved] = extracted_unresolved
+            unknown_names = raw_names[extracted == "unknown"].unique()
+            name_country_map = {name: extract_country("", name) for name in unknown_names}
+            still_unresolved = extracted == "unknown"
+            extracted.loc[still_unresolved] = raw_names.loc[still_unresolved].map(name_country_map)
+    else:
+        address_country_map = {address: extract_country(address) for address in unique_addrs}
+        extracted = raw_addrs.map(address_country_map)
+        unknown_names = raw_names[extracted == "unknown"].unique()
+        name_country_map = {name: extract_country("", name) for name in unknown_names}
+        unresolved = extracted == "unknown"
+        extracted.loc[unresolved] = raw_names.loc[unresolved].map(name_country_map)
+    result["country_extracted"] = extracted
 
     return result

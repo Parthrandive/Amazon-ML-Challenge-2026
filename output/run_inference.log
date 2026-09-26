@@ -1,0 +1,54 @@
+======================================================================
+STARTING FULL TEST SET INFERENCE PIPELINE (1.73M ENTITIES)
+======================================================================
+Loading trained LightGBM model from models/matcher_lgbm.pkl...
+Active Hardened Operating Thresholds: {'India': 0.7, 'US': 0.88, 'France': 0.79}
+Loading test Source 1 records from data/processed/test_source1_clean.tsv...
+Loaded 1,732,544 test S1 entities in 3.07s.
+Breakdown by country:
+  India     : 809,986 entities
+  US        : 663,106 entities
+  France    : 259,452 entities
+
+======================================================================
+PROCESSING PARTITION: India
+======================================================================
+Target entities: 809,986 | Operating Threshold tau: 0.7000
+  Indexed Source 2 (2,312,565 India records) in 61.9s.
+  Indexed Source 3 (2,405,000 India records) in 69.0s.
+Total India pool indexed: 4,717,565 records (2,930,273 keys) in 130.9s.
+  Processed 50,000/809,986 India entities (113 entities/s) | 43,743 with matches (125,408 total links)
+  Processed 100,000/809,986 India entities (107 entities/s) | 87,456 with matches (250,495 total links)
+  Processed 150,000/809,986 India entities (115 entities/s) | 131,134 with matches (374,986 total links)
+  Processed 200,000/809,986 India entities (118 entities/s) | 174,827 with matches (499,889 total links)
+  Processed 250,000/809,986 India entities (121 entities/s) | 218,378 with matches (624,224 total links)
+  Processed 300,000/809,986 India entities (121 entities/s) | 262,193 with matches (749,339 total links)
+  Processed 350,000/809,986 India entities (122 entities/s) | 305,900 with matches (873,964 total links)
+  Processed 400,000/809,986 India entities (124 entities/s) | 349,460 with matches (998,974 total links)
+  Processed 450,000/809,986 India entities (125 entities/s) | 393,110 with matches (1,123,841 total links)
+  Processed 500,000/809,986 India entities (109 entities/s) | 436,830 with matches (1,249,193 total links)
+  Processed 550,000/809,986 India entities (110 entities/s) | 480,432 with matches (1,373,821 total links)
+  Processed 600,000/809,986 India entities (111 entities/s) | 524,037 with matches (1,498,583 total links)
+  Processed 650,000/809,986 India entities (111 entities/s) | 567,918 with matches (1,624,268 total links)
+  Processed 700,000/809,986 India entities (112 entities/s) | 611,632 with matches (1,748,985 total links)
+  Processed 750,000/809,986 India entities (113 entities/s) | 655,256 with matches (1,873,701 total links)
+  Processed 800,000/809,986 India entities (111 entities/s) | 698,783 with matches (1,998,036 total links)
+  Processed 809,986/809,986 India entities (111 entities/s) | 707,502 with matches (2,023,060 total links)
+
+Finished India: 809,986 entities in 7284.6s.
+  Entities with matches: 707,502 (87.35%)
+  Singletons: 102,484 (12.65%)
+  Total matched links: 2,023,060
+
+======================================================================
+PROCESSING PARTITION: US
+======================================================================
+Target entities: 663,106 | Operating Threshold tau: 0.8800
+  Indexed Source 2 (1,871,330 US records) in 42.1s.
+  Indexed Source 3 (1,945,701 US records) in 51.7s.
+Total US pool indexed: 3,817,031 records (3,963,206 keys) in 93.8s.
+  Processed 50,000/663,106 US entities (119 entities/s) | 45,849 with matches (140,033 total links)
+  Processed 100,000/663,106 US entities (137 entities/s) | 91,757 with matches (280,672 total links)
+  Processed 150,000/663,106 US entities (109 entities/s) | 137,572 with matches (420,655 total links)
+  Processed 200,000/663,106 US entities (96 entities/s) | 183,286 with matches (560,766 total links)
+  Processed 250,000/663,106 US entities (89 entities/s) | 229,102 with matches (701,244 total links)

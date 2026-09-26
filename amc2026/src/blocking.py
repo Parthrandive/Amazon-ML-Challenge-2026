@@ -124,6 +124,42 @@ def get_tight_blocking_keys(
     return list(keys)
 
 
+def get_key_max_size(key: str) -> int:
+    """
+    Adaptive block depth: Specific composite keys have high/uncapped capacity,
+    broad single-token keys are strictly capped to prevent flooding.
+    """
+    if "_as_" in key:  # Address composite: number + street word (exact building/house)
+        return 10000   # essentially uncapped
+    elif "_np_" in key:  # 2-token shingles
+        return 5000    # high capacity
+    else:  # Broad single-token prefix keys (n1_, n2_, fallback_)
+        return 500     # strictly capped to prevent flooding
+
+
+def get_fallback_blocking_keys(name: Optional[str]) -> List[str]:
+    """Country-agnostic, name-only keys for records whose country is unknown.
+
+    These keys are deliberately narrower than normal blocking: they are a safety net
+    for an uncertain country, not a second all-pairs pass.  The caller still caps each
+    bucket and applies the same relevance ranking used by country partitions.
+    """
+    tokens = get_name_tokens(name)
+    if not tokens:
+        return []
+    primary = tokens[0]
+    phonetic = "k" + primary[1:] if primary.startswith("c") else primary
+    keys = {
+        f"fallback_n1_{primary[:4]}",
+        f"fallback_n1_{phonetic[:3]}",
+    }
+    if len(tokens) >= 2:
+        keys.add(f"fallback_np_{'_'.join(sorted((primary[:3], tokens[1][:3])))}")
+    if len(tokens) >= 3:
+        keys.add(f"fallback_np_{'_'.join(sorted((primary[:3], tokens[2][:3])))}")
+    return list(keys)
+
+
 def fast_combined_similarity(
     s1_name: str,
     s2_name: str,
