@@ -378,4 +378,10 @@ def preprocess_source(df: pd.DataFrame) -> pd.DataFrame:
         extracted.loc[unresolved] = raw_names.loc[unresolved].map(name_country_map)
     result["country_extracted"] = extracted
 
+    # Extract postal codes after country resolution so country-specific formats
+    # are interpreted consistently even when the input country label is absent.
+    address_country_pairs = list(zip(result["business_address_clean"], result["country_extracted"].fillna("")))
+    postal_map = {pair: extract_postal_code(pair[0], pair[1]) for pair in set(address_country_pairs)}
+    result["postal_code"] = [postal_map[pair] for pair in address_country_pairs]
+
     return result

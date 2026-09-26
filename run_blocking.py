@@ -23,6 +23,7 @@ from blocking import (
     get_address_tokens,
     get_tight_blocking_keys,
     get_fallback_blocking_keys,
+    get_adaptive_block_cap,
 )
 
 os.makedirs("outputs", exist_ok=True)

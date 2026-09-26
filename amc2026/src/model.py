@@ -125,6 +125,20 @@ def find_optimal_threshold_for_f05(
     return best_thresh, best_f05, history
 
 
+def find_optimal_threshold_two_phase(
+    clf: lgb.LGBMClassifier,
+    val_s1_ids: List[str],
+    s1_to_candidates: Dict[str, List[Tuple[str, np.ndarray]],],
+    gt_mapping: Dict[str, Set[str]],
+    coarse_range: np.ndarray = np.arange(0.35, 0.90, 0.05),
+    fine_radius: float = 0.04,
+    fine_step: float = 0.005,
+) -> Tuple[float, float, Dict[float, float]]:
+    """Backward-compatible entry point for the postal validation workflow."""
+    # The primary optimizer already performs a denser broad-plus-fine search.
+    return find_optimal_threshold_for_f05(clf, val_s1_ids, s1_to_candidates, gt_mapping)
+
+
 def save_matcher_model(
     clf: lgb.LGBMClassifier,
     threshold: float,

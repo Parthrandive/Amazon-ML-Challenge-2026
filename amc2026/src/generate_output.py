@@ -64,6 +64,7 @@ def score_candidates_and_generate_matches(
         country_idx = header.index("country") if "country" in header else header.index("country_extracted")
         name_idx = header.index("business_name_clean")
         addr_idx = header.index("business_address_clean")
+        postal_idx = header.index("postal_code") if "postal_code" in header else -1
         for line in f:
             parts = line.rstrip("\n").split("\t")
             s1_dict[parts[id_idx]] = {
@@ -71,6 +72,7 @@ def score_candidates_and_generate_matches(
                 "country": parts[country_idx] if len(parts) > country_idx and parts[country_idx] else "unknown",
                 "business_name_clean": parts[name_idx] if len(parts) > name_idx else "",
                 "business_address_clean": parts[addr_idx] if len(parts) > addr_idx else "",
+                "postal_code": parts[postal_idx] if (postal_idx != -1 and len(parts) > postal_idx) else "",
             }
     print(f"Loaded {len(s1_dict):,} S1 records in {time.time() - t0:.2f}s.")
 
@@ -98,6 +100,7 @@ def score_candidates_and_generate_matches(
             country_idx = header.index("country")
             name_idx = header.index("business_name_clean")
             addr_idx = header.index("business_address_clean")
+            postal_idx = header.index("postal_code") if "postal_code" in header else -1
             for line in f:
                 parts = line.rstrip("\n").split("\t")
                 eid = parts[id_idx]
@@ -107,6 +110,7 @@ def score_candidates_and_generate_matches(
                         "country": parts[country_idx] if len(parts) > country_idx else "",
                         "business_name_clean": parts[name_idx] if len(parts) > name_idx else "",
                         "business_address_clean": parts[addr_idx] if len(parts) > addr_idx else "",
+                        "postal_code": parts[postal_idx] if (postal_idx != -1 and len(parts) > postal_idx) else "",
                     }
                     needed.discard(eid)
                     if not needed:

@@ -36,6 +36,7 @@ def load_pool_subset(s2_path: str, s3_path: str, needed_ids: Set[str]) -> Dict[s
             country_idx = header.index("country") if "country" in header else header.index("country_extracted")
             name_idx = header.index("business_name_clean")
             addr_idx = header.index("business_address_clean")
+            postal_idx = header.index("postal_code") if "postal_code" in header else -1
             for line in f:
                 parts = line.rstrip("\n").split("\t")
                 eid = parts[id_idx]
@@ -45,6 +46,7 @@ def load_pool_subset(s2_path: str, s3_path: str, needed_ids: Set[str]) -> Dict[s
                         "country": parts[country_idx] if len(parts) > country_idx else "",
                         "business_name_clean": parts[name_idx] if len(parts) > name_idx else "",
                         "business_address_clean": parts[addr_idx] if len(parts) > addr_idx else "",
+                        "postal_code": parts[postal_idx] if postal_idx >= 0 and len(parts) > postal_idx else "",
                     }
                     needed.discard(eid)
                     if not needed:
@@ -116,6 +118,7 @@ def main():
         country_idx = header.index("country") if "country" in header else header.index("country_extracted")
         name_idx = header.index("business_name_clean")
         addr_idx = header.index("business_address_clean")
+        postal_idx = header.index("postal_code") if "postal_code" in header else -1
         for line in f:
             parts = line.rstrip("\n").split("\t")
             s1 = parts[id_idx]
@@ -125,6 +128,7 @@ def main():
                     "country": parts[country_idx] if len(parts) > country_idx and parts[country_idx] else "unknown",
                     "business_name_clean": parts[name_idx] if len(parts) > name_idx else "",
                     "business_address_clean": parts[addr_idx] if len(parts) > addr_idx else "",
+                    "postal_code": parts[postal_idx] if postal_idx >= 0 and len(parts) > postal_idx else "",
                 }
                 if len(s1_dict) == len(sample_s1_set):
                     break

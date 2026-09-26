@@ -83,7 +83,8 @@ def get_address_tokens(addr: Optional[str]) -> Tuple[List[str], List[str]]:
 def get_tight_blocking_keys(
     country: str,
     name: Optional[str],
-    addr: Optional[str]
+    addr: Optional[str],
+    postal_code: Optional[str] = None,
 ) -> List[str]:
     """
     Generates tightened composite blocking keys:
@@ -121,6 +122,18 @@ def get_tight_blocking_keys(
             for sw in street_words[:3]:
                 keys.add(f"{country}_as_{num}_{sw[:4]}")
 
+    # Pass 4: Postal-code keys supplement name/address blocks.  Use an exact
+    # code plus a short regional prefix for partial-code tolerance.
+    if postal_code is None and addr:
+        from postal import extract_postal_code
+        postal_code = extract_postal_code(addr, country)
+    if postal_code and str(postal_code).strip() not in ("POSTAL_MISSING", "nan", "None", ""):
+        clean_pc = str(postal_code).strip()
+        keys.add(f"{country}_pc_{clean_pc}")
+        prefix_length = 4 if len(clean_pc) == 6 else 3
+        if len(clean_pc) >= prefix_length:
+            keys.add(f"{country}_pcp_{clean_pc[:prefix_length]}")
+
     return list(keys)
 
 
@@ -135,6 +148,17 @@ def get_key_max_size(key: str) -> int:
         return 5000    # high capacity
     else:  # Broad single-token prefix keys (n1_, n2_, fallback_)
         return 500     # strictly capped to prevent flooding
+
+
+def get_adaptive_block_cap(key: str) -> int:
+    """Compatibility cap policy used by postal-aware validation scripts."""
+    if "_pc_" in key:
+        return 1200
+    if "_as_" in key:
+        return 800
+    if "_pcp_" in key:
+        return 400
+    return 500
 
 
 def get_fallback_blocking_keys(name: Optional[str]) -> List[str]:
@@ -165,7 +189,9 @@ def fast_combined_similarity(
     s2_name: str,
     s1_toks_set: Set[str],
     s1_nums_set: Set[str],
-    s2_nums_set: Set[str]
+    s2_nums_set: Set[str],
+    s1_postal: Optional[str] = None,
+    s2_postal: Optional[str] = None,
 ) -> float:
     """
     Lightweight, C-level string similarity pre-ranker.
@@ -197,4 +223,13 @@ def fast_combined_similarity(
         else:
             addr_bonus = -0.15 # Conflicting numbers on same street
 
-    return name_sim + addr_bonus
+    postal_bonus = 0.0
+    missing = {"POSTAL_MISSING", "nan", "None", ""}
+    if s1_postal and s2_postal and str(s1_postal) not in missing and str(s2_postal) not in missing:
+        p1, p2 = str(s1_postal), str(s2_postal)
+        if p1 == p2:
+            postal_bonus = 0.25
+        elif len(p1) >= 3 and len(p2) >= 3 and p1[:3] == p2[:3]:
+            postal_bonus = 0.10
+
+    return name_sim + addr_bonus + postal_bonus
